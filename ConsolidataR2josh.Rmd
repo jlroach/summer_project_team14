@@ -1,0 +1,176 @@
+---
+title: "HW1"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(Hmisc)
+library(car)
+library(corrplot)
+library(ggplot2)
+library(tidyverse)
+library(ggthemes)
+library(gridExtra)
+library(e1071)
+library(mlbench)
+library(reshape2)
+library(subselect)
+library(pls)
+library(vcd)
+library(dplyr)
+library(caret)
+library(AppliedPredictiveModeling)
+library(elasticnet)
+library(RColorBrewer)
+library(RANN)
+library(ggfortify)
+```
+
+
+#1 It would appear that the response is default_payments_nextmonth. The other factors seem to be part of history of behavior over time or demographics. It seems the best use is going to be used to predict likelyhood of missing the next payment. 
+
+```{r  }
+df <- read.csv('C:/Users/sispe/Documents/School/Lab/Summer Project/consoliData.csv', header = TRUE, stringsAsFactors = FALSE)
+df <- df[-c(69,70,71,72,73),]
+summary(df)
+```
+
+```{r}
+#Change data type to numeric
+for(i in c(2:53:ncol(df))) {
+    df[,i] <- as.numeric(df[,i])
+}
+class(df$expl)
+class(df$Country)
+
+str(df)
+summary(df)
+print
+opar=par()
+par(bg="black", fg="white", col="white", col.axis="white", col.lab="white", col.main="white", col.sub="white")
+```
+
+```{r}
+#Split Data
+pred <- subset(df, select = c(-expl, -Country, -perCap, -popSizeTotal))
+explo <- subset(df, select = perCap)
+#colnames(explo) <- "expl"
+
+#kNN imputation
+pred1 <- preProcess(pred, method = c("center", "scale", "knnImpute"))
+predi <- predict(pred1, pred)
+
+#Near0
+#predNoZero <- nearZeroVar(predd)
+#predZero <- predd[,-predNoZero]
+#predNoZero
+#predZero
+  ##Produced a dataset with 68 rows and 0 columns, which is unpossible, so ya.
+
+#Subset
+set.seed(123)
+trnRow <- createDataPartition(explo$perCap, p = .75, list = FALSE)
+
+#Train/Test
+trnPred <- predi[trnRow,]
+trnExpl <- explo[trnRow,]
+
+tstPred <- predi[-trnRow,]
+tstExpl <- explo[-trnRow,]
+
+boxplot(df$perCap, main="Response Variable")
+```
+
+
+```{r}
+#set.seed(212)
+ctrlRCV = trainControl(method="repeatedcv", repeats=25)
+ctrlLOO = trainControl(method="LOOCV")
+
+rcvPCA = train(x=trnPred, y=trnExpl, method="pcr", trControl=ctrlRCV, tuneLength=25)
+rcvPCA
+predPCA = predict(rcvPCA, trnPred)
+
+resPCA = residuals(rcvPCA)
+plot(predPCA, trnExpl, xlab="Fitted", ylab="Actual", main="PCA")
+abline(0,1)
+
+looPCA = train(x=trnPred, y=trnExpl, method="pcr", trControl=ctrlLOO, tuneLength=25)
+looPCA
+
+```
+
+
+```{r}
+#RandomForrest
+#ctrlFrst1 <- trainControl(method = "repeatedcv", repeats = 20)
+#rfModel <- randomForest(trnPred, trnExpl,
+       #                 importance = TRUE, ntrees = 500)
+#rfModel
+rf_model <-train(x = trnPred, y = trnExpl, method="rf",
+                trControl = trainControl(method="repeatedcv", repeats = 15),
+                prox=TRUE,allowParallel=TRUE)
+rf_model
+pred_rf <- predict(rf_model, trnPred)
+p1 <- plot(pred_rf, trnExpl, xlab = "Fitted", ylab = "Actual", main = "Random Forrest") 
+p1
+
+##RIDGE
+ridgeMod <- enet(x = as.matrix(trnPred), y = trnExpl, lambda = 0.001)
+ridgePred <- predict(ridgeMod, newx = as.matrix(tstPred),
+                     s = 1, mode = "fraction", type = "fit")
+head(ridgePred$fit)
+ridgeGrid <- data.frame(.lambda = seq(0, .1, length = 15))
+set.seed(123)
+ctrl = trainControl(method = "repeatedcv", repeats = 10)
+ridgeFit <- train(trnPred, trnExpl, method = "ridge", tuneGrid = ridgeGrid, trControl = ctrl, preProcess = c("center", "scale"))
+ridgeFit
+```
+
+```{r}
+##LINEAR MODEL##
+set.seed(123)
+lmFit<-train(x=trnPred,y=trnExpl, method = "lm")
+summary(lmFit)
+names(lmFit$results)
+RSS <- sum((lmFit$residuals)^2)
+MSE <- RSS/length(lmFit$residuals)
+RMSE <- sqrt(MSE)
+resid(lmFit)
+plot(lmFit)
+```
+
+```{r}
+Control <- trainControl(method = "repeatedcv")
+set.seed(123)
+PLSmodel <- train(x = trnPred, y = trnExpl, method = "pls", trControl = Control, tuneLength = 25)
+PLSmodel
+comps <- PLSmodel$results
+comps$Model <- rep("PLS", each = 25)
+xyplot(RMSE ~ ncomp, data = comps, groups = Model, type = c("g", "o"), auto.key = list(columns = 2), xlab = "#Components")
+PLSpred <- predict(PLSmodel, newdata = trnPred)
+plot(PLSpred, trnExpl, xlab="Fitted", ylab="Actual", main="PLS with K-Fold")
+```
+
+```{r}
+Control <- trainControl(method = "lgocv")
+set.seed(23)
+PLSmodel.lgocv <- train(x = trnPred, y = trnExpl, method = "pls", trControl = Control, tuneLength = 25)
+PLSmodel.lgocv
+#PLStest <- predict(PLSmodel, newdata = tstPred)
+```
+
+```{r}
+PLStest <- predict(PLSmodel, newdata = tstPred)
+PLStest
+plot(PLStest)
+plot(PLSmodel,newdata=tstPred,asp=1,line=TRUE)
+```
+
+```{r}
+LMtestpred <- predict(lmFit, newdata = tstPred)
+LMtestpred
+```
+
+
